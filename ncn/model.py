@@ -11,7 +11,7 @@ import ncn.core
 from ncn.core import Filters, DEVICE
 
 logger = logging.getLogger(__name__)
-
+logging.basicConfig(level=logging.DEBUG)
 
 class TDNN(nn.Module):
     """
@@ -33,7 +33,8 @@ class TDNN(nn.Module):
         super().__init__()
         # model input shape: [N: batch size, D: embedding dimensions, L: sequence length]
         # no bias to avoid accumulating biases on padding
-        self.conv = nn.Conv2d(1, num_filters, kernel_size=(embed_size, filter_size), bias=False)
+        self.conv = nn.Conv2d(1, num_filters, kernel_size=(filter_size,embed_size), bias=False)
+        #self.conv = nn.Conv2d(1, num_filters, kernel_size=(embed_size, filter_size), bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -47,18 +48,26 @@ class TDNN(nn.Module):
         - **Convolved sequence** *(batch_size, num_filters)*:  
             Tensor containing the output. 
         """
+        #logger.info(f"Input shape1: {x.shape}")
         # [N: batch size, L: seq length, D embedding dimensions] -> [N: batch size, D embedding dimensions, L: seq length]
-        x = x.permute(0, 2, 1)
+        
+        #x = x.permute(0, 2, 1)
+        #logger.info(f"Input shape2: {x.shape}")
+        
         # output shape: [N: batch size, 1: channels, D: embedding dimensions, L: sequence length]
         x = x.unsqueeze(1)
-
+        #logger.info(f"Input shape3: {x.shape}")
 
         # output shape: batch_size, num_filters, 1, f(seq length)
         x = F.relu(self.conv(x))
-        pool_size = x.shape[-1]
-
+        #logger.info(f"Input shape4: {x.shape}")
+        pool_size = x.shape[2]
+        pool_size =(pool_size,1)
+        #logger.info(f"pool size: {pool_size}")
+        
         # output shape: batch_size, num_filters, 1, 1
         x = F.max_pool2d(x, kernel_size=pool_size)
+        #logger.info(f"Input shape6:{x.shape}")
 
         # output shape: batch_size, 1, num_filters, 1
         return x.permute(0, 2, 1, 3)
@@ -103,16 +112,18 @@ class TDNNEncoder(nn.Module):
             Tensor containing the complete context/author encodings.
         """
         x = [encoder(x) for encoder in self.encoder]
+        
         assert len(set([e.shape[0] for e in x])) == 1, "Batch sizes don't match!"
 
 
         # output shape: batch_size, list_length, num_filters
-        x = torch.cat(x, dim=1).squeeze(3)
+        x = torch.cat(x, dim=1)
 
         batch_size = x.shape[0]
 
         # output shape: batch_size, list_length*num_filters
-        x = x.view(batch_size, -1)
+        x = x.reshape(batch_size, -1)
+        #x = x.view(batch_size, -1)
 
         # apply nonlinear mapping
         x = torch.tanh(self.fc(x))
