@@ -54,7 +54,7 @@ class Evaluator:
                                             author_vocab_size=len(self.authors.vocab),
                                             pad_idx=self.pad,
                                             num_filters=num_filters,
-                                            authors=True, 
+                                            authors=False, 
                                             embed_size=embed_size,
                                             num_layers=num_layers,
                                             hidden_size=num_filters,
