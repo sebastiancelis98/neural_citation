@@ -271,22 +271,17 @@ mag_df = pd.read_csv('ncn/input/mag_all.txt')
 totalLen = len(mag_df)
 
 idMapping = {}
-authorMapping = {}
 
 for index, row in mag_df.iterrows():
   paper_id = row['paperid']
   title = row['papertitle']
-  authors = row['citedauthors']
   if title not in idMapping.keys():
       idMapping[title] = paper_id
-      authorMapping[title] = authors
-  print(index/totalLen)
+  print("Progress: " + str(index/totalLen))
 
 with open("assets/title_tokenized_to_paper_id.pkl", "wb") as fp:
     pickle.dump(idMapping, fp)
 
-with open("assets/title_to_authors.pkl", "wb") as fp:
-    pickle.dump(authorMapping, fp)
 
 
 
