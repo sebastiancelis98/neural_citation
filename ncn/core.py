@@ -85,6 +85,9 @@ MAX_TITLE_LENGTH = 30
 MAX_CONTEXT_LENGTH = 100
 """Maximum encoder sequence length."""
 
+MIN_CONTEXT_LENGTH = 15
+"""Minimum encoder sequence length."""
+
 MAX_AUTHORS = 5
 """Maximum number of authors considered"""
 

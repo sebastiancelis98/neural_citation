@@ -1,4 +1,5 @@
 import re
+import os
 import pandas as pd
 import logging
 import json
@@ -17,215 +18,114 @@ from torchtext.data import Field, BucketIterator, Dataset, TabularDataset
 
 import ncn.core
 from ncn.core import PathOrStr, IteratorData, BaseData, get_stopwords
-from ncn.core import CITATION_PATTERNS, MAX_TITLE_LENGTH, MAX_CONTEXT_LENGTH, MAX_AUTHORS, SEED
+from ncn.core import CITATION_PATTERNS, MAX_TITLE_LENGTH, MAX_CONTEXT_LENGTH, MIN_CONTEXT_LENGTH, MAX_AUTHORS, SEED
 
 
 
 logger = logging.getLogger(__name__)
 
-
-def process_text(text: str, delimiter: str = "\n============\n") -> List[str]:
-    """
-    Preprocessing function for preprocessing arxiv CS paper text.  
-
-    ## Parameters:   
-
-    - **text** *(str)*: .txt file string object containing the text of a paper.  
-    - **delimiter** *(str = "\\n============\\n")*: token separating text sentences.  
-
-    ## Output:  
-
-    - List with sentences split at *delimiter*. Only sentences containing *CITATION_PATTERNS* are retained.
-    """
-    text = re.sub("<formula>", '', text)
-    sentences = text.split(delimiter)
-    contexts = []
-    for sentence in sentences:
-        if re.search(CITATION_PATTERNS, sentence):
-            contexts.append(sentence)
-    return contexts
-
-
-def process_refs(refs: str, delimiter_patterns: str = "GC|DBLP") -> List[str]:
-    """
-    Preprocessing function for preprocessing arxiv CS paper references.   
-
-    ## Parameters:   
-
-    - **refs** *(str)*: reference file string.  
-    - **delimiter_patterns** *(str = "GC|DBLP")*: regex patterns used to split the inidividual references.  
-
-    ## Output:  
-
-    - List of citation contexts split at *delimiter*.
-    """
-    refs = re.sub("\n", '', refs)
-    return re.split(delimiter_patterns, refs)
-
-
-
-def generate_context_samples(contexts: Collection[str], refs: Collection[str], 
-                       meta: Dict[str, str], textpath: Path) -> DataFrame:
-    """
-    Generates citation context samples for a single paper. 
-    The contexts, references and metadata are expected to be passed in tokenized form.   
+def get_mag_data(path_to_data):
+    #get citing and cited files
+    citing_file = os.path.join(path_to_data, "mag_citing_all.txt")
+    cited_file = os.path.join(path_to_data, "mag_cited_all.txt")
+    citing_df = pd.read_csv(citing_file)
+    cited_df = pd.read_csv(cited_file)
     
-    ## Parameters:  
+    #combine citing and cited dataframes in a single dataframe
+    data =citing_df
+    data['citedtitle']=cited_df['papertitle']
+    data['citedauthors']=cited_df['groupedcitedauthors']
+    #save combined dataframe
+    save_path = os.path.join(path_to_data, "mag_all.txt")
+    data.to_csv(save_path, compression=None, index=False, index_label=False)
     
-    - **contexts** *(Collection[str])*:  Citation contexts contained within a paper.  
-    - **refs** *(Collection[str])*:  Reference information corresponding to the contexts.  
-    - **meta** *(Dict[str, str])*:  Dictionary containing metadata of the citing paper.   
-    - **textpath** *(Path)*:  Path to a paper's textfile.  
+    #######Extract subset of data, all data published after 2014#####
+    data_subset=data.loc[data['publishedyear']>=2014]
+    save_path=os.path.join(path_to_data, "mag_subset.txt")
+    data_subset.to_csv(save_path, compression=None, index=False, index_label=False)
+
+def split_mag_data(path_to_data):
     
-    ## Output:  
+    mag_file = os.path.join(path_to_data, "mag_subset.txt")
+    data = pd.read_csv(mag_file)
     
-    - **samples** *(pandas.DataFrame)*:  All fully extractable context samples.
-        Each sample has to have information for citation context, citing authors, cited authors and cited title.  
-    """
+    #split dataframe into train, valida, test
+    train=data.loc[data['publishedyear']<2017]
+    valid=data.loc[data['publishedyear']==2017]
+    test=data.loc[data['publishedyear']>2017]
+    
+    #clean dataframe
+    logger.info("preparing training samples...")
+    clean_mag_data(train, os.path.join(path_to_data, "mag_train.csv"))
+    logger.info("preparing validation samples...")
+    clean_mag_data(valid, os.path.join(path_to_data, "mag_valid.csv"))
+    logger.info("preparing testing samples...")
+    clean_mag_data(test, os.path.join(path_to_data, "mag_test.csv"))
+    
+
+def clean_mag_data(dataframe, save_path):
+
     samples = []
-    for sentence in contexts:
-        # return a list of all citations in a sentence
-        hits = re.findall(CITATION_PATTERNS, sentence)
-        for hit in hits:
-            # remove the identifiers as we use them to split .refs file
-            s = re.sub("GC|DBLP", '', hit)
-            for ref in refs:
-                try:
-                    if re.search(s[1:-1], ref):
-                        # find and preprocess authors
-                        authors = re.findall(";(.*?)\`\`", ref)
-                        authors = ''.join(authors)
-                        authors = re.sub(r"\band\b", ',', authors)
-                        authors = re.sub(r"-", '', authors)
-                        authors = authors.strip(',  ')
-
-                        # skip the sample if there is no author information
-                        if len(authors) == 0:
-                            continue
-                        
-                        # find and preprocess titles
-                        title = re.findall('\`\`(.*?)\'\'', ref)
-                        title = ''.join(title).strip(',')
-                        
-                        # generate sample in correct format
-                        sample = {"context": re.sub(CITATION_PATTERNS, '', sentence),
-                                  "authors_citing": ','.join(meta["authors"]),
-                                  "title_cited": title,
-                                  "authors_cited": authors}
-                        samples.append(pd.DataFrame(sample, index=[0]))
-                except:
-                    logger.info('!'*30)
-                    logger.info(f"Found erroneous ref at {textpath.stem}.")
-                    logger.info(ref)
-    return samples
-
-
-def clean_incomplete_data(path: PathOrStr) -> None:
-    """
-    Cleaning function for the arxiv CS dataset. Checks all .txt files in the target folder and looks
-    for matching .ref and .meta files. If a file is missing, all others are deleted.  
-    If any file of the 3 files (.txt, .meta, .refs) is empty, the triple is removed as well.  
-
-    ## Parameters:   
-
-    - **path** *(PathOrStr)*: Path object or string to the dataset.      
-    """
-    path = Path(path)
-
-    incomplete_paths = 0
-    empty_files = 0
-    no_files = len(list(path.glob("*.txt")))
-
-    for textpath in path.glob("*.txt"):
-        metapath = textpath.with_suffix(".meta")
-        refpath = textpath.with_suffix(".refs")
-
-        if ( not metapath.exists() ) or ( not refpath.exists() ):
-            incomplete_paths += 1
-            logger.info(f"Found incomplete file: {textpath.stem}")
-            textpath.unlink()
-            try:
-                metapath.unlink()
-            except FileNotFoundError:
-                pass
-            try:
-                refpath.unlink()
-            except FileNotFoundError:
-                pass
-        else:
-            with open(textpath, 'r') as f:
-                text = f.read()
-            with open(metapath, 'r') as f:
-                meta = f.read()
-            with open(refpath, 'r') as f:
-                refs = f.read()
-
-            if len(text) == 0 or len(meta) == 0 or len(refs) == 0:
-                empty_files += 1
-                logger.info(f"Found empty file: {textpath.stem}")
-                textpath.unlink()
-                metapath.unlink()
-                refpath.unlink()
     
-    message = (f"Incomplete paths(not all files present): {incomplete_paths} out of {no_files}"
-                f"\nAt least one empty file: {empty_files} out of {no_files}")
-    logger.info(message)
-
-
-def prepare_data(path: PathOrStr) -> None:
-    """ 
-    Extracts citation contexts from each (.txt, .meta, .refs) tupel in the given location 
-    and stores them in a DataFrame.  
-    Each final sample has the form: [context, title_citing, authors_citing, title_cited, authors_cited].  
-    The resulting DataFrame is saved as Python pickle object in the parent directory.  
-
-    ## Parameters:   
-
-    - **path** *(PathOrStr)*: Path object or string to the dataset.
-    """
-    path = Path(path)
-    save_dir = path.parent
-    if not save_dir.exists(): save_dir.mkdir()
+    # prepare tokenization functions
+    nlp = spacy.load("en_core_web_lg")
+    tokenizer = Tokenizer(nlp.vocab)
     
-    data = []
-
-    no_total = len(list(path.glob("*.txt")))
-    logger.info('-'*30)
-    logger.info(f"Total number of files to process: {no_total}")
-    logger.info('-'*30)
-
-    for textpath in tqdm(path.glob("*.txt")):
+    #take samples with at least 10 words in citation context
+    for index, row in dataframe.iterrows():
+        context = row['context']
+        text = re.sub("[" + re.escape(string.punctuation) + "]", " ", context)
+        text = [token.lemma_ for token in tokenizer(text) if not token.like_num]
+        text = [token for token in text if token.strip()]
+        if(len(text) < MIN_CONTEXT_LENGTH):
+            continue
+        # generate sample in correct format
+	#"paper_id": row['paperid'],
+        sample = {"context": context,
+                  "authors_citing": row['citingauthors'],
+                  "title_cited": row['citedtitle'],
+                  "authors_cited": row['citedauthors']}
+        samples.append(pd.DataFrame(sample, index=[0]))
+    
+    logger.info("mag samples ready to load to file...")
         
-        metapath = textpath.with_suffix(".meta")
-        refpath = textpath.with_suffix(".refs")
-
-        with open(textpath, 'r') as f:
-            text = f.read()
-        with open(metapath, 'r') as f:
-            meta = f.read()
-        with open(refpath, 'r') as f:
-            refs = f.read()
-        
-        # preprocess string data
-        meta = json.loads(meta)
-        text = process_text(text)
-        refs = process_refs(refs)
-        data.extend(generate_context_samples(text, refs, meta, textpath))
-
-
-    dataset = pd.concat(data, axis=0)
-
-    # prune empty fields
-    dataset = dataset[(dataset["context"] != "") & 
-                      (dataset["authors_citing"] != "") & 
-                      (dataset["title_cited"] != "") & 
-                      (dataset["authors_cited"] != "")]
-
-    dataset.reset_index(inplace=True)
-    dataset.drop("index", axis=1, inplace=True)
-    save_path = save_dir/f"arxiv_data.csv"
+    dataset = pd.concat(samples, axis=0)
     dataset.to_csv(save_path, compression=None, index=False, index_label=False)
-    logger.info(f"Dataset with {len(dataset)} samples has been saved to: {save_path}.")
+    
+
+def prepare_mag_data(base_dir):
+
+    mag_file = os.path.join(base_dir, "mag_subset.txt")
+    mag_df = pd.read_csv(mag_file)
+    samples = []
+    
+    # prepare tokenization functions
+    nlp = spacy.load("en_core_web_lg")
+    tokenizer = Tokenizer(nlp.vocab)
+    
+    #take samples with at least 10 words in citation context
+    for index, row in mag_df.iterrows():
+        context = row['context']
+        text = re.sub("[" + re.escape(string.punctuation) + "]", " ", context)
+        text = [token.lemma_ for token in tokenizer(text) if not token.like_num]
+        text = [token for token in text if token.strip()]
+        if(len(text) < MIN_CONTEXT_LENGTH):
+            continue
+        # generate sample in correct format
+        sample = {"context": context,
+                  "authors_citing": row['citingauthors'],
+                  "title_cited": row['citedtitle'],
+                  "authors_cited": row['citedauthors']}
+        samples.append(pd.DataFrame(sample, index=[0]))
+    
+    logger.info("mag samples ready to load to file...")
+        
+    dataset = pd.concat(samples, axis=0)
+    save_path = os.path.join(base_dir, "mag_data.csv")
+    dataset.to_csv(save_path, compression=None, index=False, index_label=False)
+    
+
+    
 
 
 def title_context_preprocessing(text: str, tokenizer: Tokenizer, identifier:str) -> List[str]:
@@ -335,7 +235,6 @@ def get_fields() -> Tuple[Field, Field, Field]:
 
     return CNTXT, TTL, AUT
 
-
 def get_datasets(path_to_data: PathOrStr, 
                  len_context_vocab: int,
                  len_title_vocab: int,
@@ -380,7 +279,6 @@ def get_datasets(path_to_data: PathOrStr,
     train, valid, test = dataset.split([0.8,0.1,0.1], random_state = state)
     return BaseData(cntxt=CNTXT, ttl=TTL, aut=AUT, train=train, valid=valid, test=test)
 
-
 def get_bucketized_iterators(path_to_data: PathOrStr, batch_size: int = 16,
                              len_context_vocab: int = 30000,
                              len_title_vocab: int = 30000,
@@ -405,17 +303,21 @@ def get_bucketized_iterators(path_to_data: PathOrStr, batch_size: int = 16,
     data = get_datasets(path_to_data=path_to_data, len_context_vocab=len_context_vocab,
                         len_title_vocab=len_title_vocab, len_aut_vocab=len_aut_vocab)
 
+    
     # create bucketted iterators for each dataset
     train_iterator, valid_iterator, test_iterator = BucketIterator.splits((data.train, data.valid, data.test), 
-                                                                          batch_size = batch_size,
+                                                                          batch_sizes = (batch_size, batch_size, batch_size),
                                                                           sort_within_batch = True,
                                                                           sort_key = lambda x : len(x.title_cited))
     
+    logger.info("Bucked Iterator has been created...")
     return IteratorData(data.cntxt, data.ttl, data.aut, train_iterator, valid_iterator, test_iterator)
 
     
 if __name__ == '__main__':
-    # path_to_data = "/home/timo/DataSets/KD_arxiv_CS/arxiv-cs"
-    # clean_incomplete_data(path_to_data)
-    # prepare_data(path_to_data)
-    data = get_bucketized_iterators("/home/timo/DataSets/KD_arxiv_CS/arxiv_data.csv")
+    #base_dir = "/home/maria/input"
+    base_dir = "/home/fr/fr_fr/fr_mm699/input"
+    #get_mag_data(base_dir)
+    #prepare_mag_data(base_dir)
+    #split_mag_data(base_dir)    
+    data = get_bucketized_iterators(base_dir)

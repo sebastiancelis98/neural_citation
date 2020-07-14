@@ -18,7 +18,6 @@ from ncn.model import NeuralCitationNetwork
 
 logger = logging.getLogger(__name__)
 
-
 class Evaluator:
     """
     Evaluator class for the neural citation network. Uses a trained NCN model and BM-25 to perform
@@ -57,11 +56,13 @@ class Evaluator:
                                             authors=False, 
                                             embed_size=embed_size,
                                             num_layers=num_layers,
-                                            hidden_size=num_filters,
+                                            hidden_size=256,
                                             dropout_p=0.2,
                                             show_attention=show_attention)
+
+        print(self.model)
         self.model.to(DEVICE)
-        self.model.load_state_dict(torch.load(path_to_weights, map_location=DEVICE))
+        self.model.load_state_dict(torch.load(path_to_weights, map_location=DEVICE), strict=False)
         self.model.eval()
         logger.info(self.model.settings)
 
@@ -69,16 +70,16 @@ class Evaluator:
         self.show_attention = show_attention
 
         # instantiate examples, corpus and bm25 depending on mode
-        logger.info(f"Creating corpus in eval={self.eval} mode.")
+        
         if self.eval:
             self.examples = data.test.examples
-            logger.info(f"Number of samples in BM25 corpus: {len(self.examples)}")
+            logger.info("Number of samples in BM25 corpus: {len(self.examples)}")
             self.corpus = list(set([tuple(example.title_cited) for example in self.examples]))
             self.bm25 = BM25(self.corpus)
             self.context_cited_indices = self._get_context_title_indices(self.examples)
         else:
             self.examples = data.train.examples + data.train.examples+ data.train.examples
-            logger.info(f"Number of samples in BM25 corpus: {len(self.examples)}")
+            logger.info("Number of samples in BM25 corpus: {len(self.examples)}")
             self.corpus = list(set([tuple(example.title_cited) for example in self.examples]))
             self.bm25 = BM25(self.corpus)
             
@@ -182,7 +183,7 @@ class Evaluator:
                     citing = padded.to(DEVICE)
 
                 top_titles = self._get_bm_top(example.context)
-                logger.info(f"True title in top_titles: {example.title_cited in top_titles}.")
+                logger.info("True title in top_titles: {example.title_cited in top_titles}.")
                 top_authors = [self.title_aut_cited[tuple(title)] for title in top_titles]
                 
                 # add all true cited titles (can be multiple per context)
@@ -195,8 +196,8 @@ class Evaluator:
 
                 
 
-                logger.debug(f"Number of candidate authors {len(top_authors)}.")
-                logger.debug(f"Number of candidate titles {len(top_titles)}.")
+                logger.debug("Number of candidate authors {len(top_authors)}.")
+                logger.debug("Number of candidate titles {len(top_titles)}.")
                 assert len(top_authors) == len(top_titles), "Evaluation title and author lengths don't match!"
 
                 # prepare batches
@@ -211,35 +212,35 @@ class Evaluator:
                 msg = "Evaluation batch sizes don't match!"
                 assert context.shape[0] == citing.shape[0] == citeds.shape[0] == titles.shape[1], msg
 
-                logger.debug(f"Context shape: {context.shape}.")
-                logger.debug(f"Citing shape: {citing.shape}.")
-                logger.debug(f"Titles shape: {titles.shape}.")
-                logger.debug(f"Citeds shape: {citeds.shape}.")
+                logger.debug("Context shape: {context.shape}.")
+                logger.debug("Citing shape: {citing.shape}.")
+                logger.debug("Titles shape: {titles.shape}.")
+                logger.debug("Citeds shape: {citeds.shape}.")
 
                 # calculate scores
                 output = self.model(context = context, title = titles, authors_citing = citing, authors_cited = citeds)
                 output = output[1:].permute(1,2,0)
                 titles = titles[1:].permute(1,0)
 
-                logger.debug(f"Evaluation output shapes: {output.shape}")
-                logger.debug(f"Evaluation title shapes: {titles.shape}")
+                logger.debug("Evaluation output shapes: {output.shape}")
+                logger.debug("Evaluation title shapes: {titles.shape}")
 
                 scores = self.criterion(output, titles)
                 scores = scores.sum(dim=1)
-                logger.info(f"Evaluation scores shape: {scores.shape}")
+                logger.info("Evaluation scores shape: {scores.shape}")
 
                 _, index = scores.topk(x, largest=False, sorted=True, dim=0)
 
-                logger.info(f"Index: {index}")
-                logger.info(f"Lowest scores: {scores[index]}")
-                logger.info(f"Range of true titles: {len(top_titles) - 1} - {len(top_titles) - 1 - append_count}")
+                logger.info("Index: {index}")
+                logger.info("Lowest scores: {scores[index]}")
+                logger.info("Range of true titles: {len(top_titles) - 1} - {len(top_titles) - 1 - append_count}")
 
                 # check how many of the concatenated (=true) titles have been returned
                 scored = 0
                 for i in range(append_count):
                     if len(top_titles) - (i + 1) in index: scored += 1
                     
-                logger.info(f"Scored {scored} out of {append_count} titles at {x}.")
+                logger.info("Scored {scored} out of {append_count} titles at {x}.")
                 
                 recall_list.append(scored/append_count)
 
@@ -285,7 +286,7 @@ class Evaluator:
             citeds = citeds.to(DEVICE)
             titles = titles.to(DEVICE)
 
-            logger.debug(f"Evaluation title shapes: {titles.shape}")
+            logger.debug("Evaluation title shapes: {titles.shape}")
 
             # repeat context and citing to len(indices) and calculate loss for single, large batch
             context = context.repeat(len(top_titles), 1)
@@ -303,12 +304,12 @@ class Evaluator:
             output = output[1:].permute(1,2,0)
             titles = titles[1:].permute(1,0)
 
-            logger.debug(f"Evaluation output shapes: {output.shape}")
-            logger.debug(f"Evaluation title shapes: {titles.shape}")
+            logger.debug("Evaluation output shapes: {output.shape}")
+            logger.debug("Evaluation title shapes: {titles.shape}")
 
             scores = self.criterion(output, titles)
             scores = scores.sum(dim=1)
-            logger.debug(f"Evaluation scores shape: {scores.shape}")
+            logger.debug("Evaluation scores shape: {scores.shape}")
             _, index = scores.topk(top_x, largest=False, sorted=True, dim=0)
 
             recommended = [" ".join(top_titles[i]) for i in index]
