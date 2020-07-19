@@ -18,7 +18,7 @@ def clean_text(text):
     return text
 
 # Connect to Postgres
-conn = psycopg2.connect("dbname=MAG19 user=mag password=1maG$ host=localhost port=8888")
+conn = psycopg2.connect("dbname=mag_20200619 user=citerecdemo password=2qPF7FV8TutgPfGXCZ host=aifb-ls3-maia.aifb.kit.edu port=5432")
 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 file = open('input/mag_citing_data.txt', 'a')

@@ -6,7 +6,7 @@ from gensim.parsing import preprocessing
 import contractions
 
 # Connect to Postgres
-conn = psycopg2.connect("dbname=MAG19 user=mag password=1maG$ host=localhost port=8888")
+conn = psycopg2.connect("dbname=mag_20200619 user=citerecdemo password=2qPF7FV8TutgPfGXCZ host=aifb-ls3-maia.aifb.kit.edu port=5432")
 cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
 query = """SELECT citedauthors.paperid, citedauthors.publishedyear, citedauthors.referenceid, citedauthors.context, citedauthors.papertitle, string_agg(authors.displayname::character varying, ',') AS groupedcitedauthors FROM
@@ -22,7 +22,7 @@ query = """SELECT citedauthors.paperid, citedauthors.publishedyear, citedauthors
                          ON papers.paperid=fieldsofstudy.paperid
                     ) AS computersciencepapers
                     INNER JOIN 
-                    (SELECT paperid FROM paperlanguages WHERE languagecode='en') AS languages 
+                    (SELECT paperid FROM paperurls WHERE languagecode='en') AS languages 
                     ON languages.paperid=computersciencepapers.paperid
                 ) AS englishcspapers INNER JOIN             
                 (SELECT paperid, paperreferenceid AS referenceid, citationcontext AS context
